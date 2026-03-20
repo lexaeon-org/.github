@@ -24,28 +24,63 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install anthropic httpx
+        run: pip install anthropic
 
       - name: Get PR diff
-        id: diff
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr diff ${{ github.event.pull_request.number }} > pr_diff.txt
-          echo "lines=$(wc -l < pr_diff.txt)" >> $GITHUB_OUTPUT
+          echo "Diff size: $(wc -l < pr_diff.txt) lines"
 
       - name: Run Claude review
-        id: review
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REPO_NAME: ${{ github.repository }}
-        run: python .github/scripts/claude_review.py
-
-      - name: Post review comment
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body-file review_comment.md
+          python3 - <<'PYEOF'
+          import anthropic, os, textwrap
+
+          api_key   = os.environ["ANTHROPIC_API_KEY"]
+          pr_title  = os.environ.get("PR_TITLE", "")
+          pr_author = os.environ.get("PR_AUTHOR", "")
+          repo_name = os.environ.get("REPO_NAME", "")
+
+          with open("pr_diff.txt") as f:
+              diff = f.read()
+
+          if len(diff) > 80_000:
+              diff = diff[:80_000] + "\n\n[diff truncated — review remaining changes manually]"
+
+          prompt = textwrap.dedent(f"""
+              You are a senior engineer reviewing a pull request for security,
+              performance, and code quality issues.
+
+              Repository: {repo_name}
+              PR Title:   {pr_title}
+              Author:     {pr_author}
+
+              ## What to look for
+
+              ### Security (highest priority)
+              - New routes missing auth checks (getUser, requireOrgRole, requireAdmin)
+              - DB queries missing organization_id filter — cross-org data leak risk
+              - RLS bypassed via service role without manual org_id filter in app code
+              - Caller-supplied org_id used without server-side verification from session
+              - New tables or columns missing RLS policies
+              - Raw SQL with string interpolation (SQL injection)
+              - Hardcoded secrets, API keys, or credentials
+              - Edge functions or cron jobs with no or weak auth
+
+              ### Performance
+              - Sequential awaits that could be Promise.all() or asyncio.gather()
+              - N+1 query patterns — queries inside loops
+              - External API calls missing AbortSignal.timeout() or equivalent
+              - select('*') on large tables where only a few columns are needed
+              - Missing indexes on frequently filtered columns
+
+              ### Code quality
+              - TypeScript `any` types that bypass type safety
+              -
