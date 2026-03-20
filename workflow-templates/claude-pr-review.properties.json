@@ -1,0 +1,6 @@
+{
+  "name": "Claude PR Review",
+  "description": "Automated PR review using Claude — security, performance, and code quality",
+  "iconName": "octicon-shield",
+  "categories": ["security", "code-quality"]
+}
